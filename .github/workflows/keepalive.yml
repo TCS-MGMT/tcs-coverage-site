@@ -1,0 +1,23 @@
+name: Supabase keep-alive
+# The scheduler's Supabase backend is on the free plan, which PAUSES a project after
+# ~7 days with no API activity (that's what took the app down on 2026-07-20). This
+# pings the API daily so it always counts as active. The anon key is public by design
+# (it's served to every site visitor in config.js); RLS returns no data without a login.
+on:
+  schedule:
+    - cron: "17 13 * * *"   # daily, 13:17 UTC (~8:17 AM Central)
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST (counts as project activity)
+        run: |
+          ANON="$(curl -s https://schedule.texascleaningservices.org/config.js | grep -oE "SUPABASE_ANON_KEY: *'[^']*'" | sed "s/.*'\([^']*\)'.*/\1/")"
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://llgppyxbozwwafprwwiq.supabase.co/rest/v1/presence?select=person_id&limit=1" \
+            -H "apikey: $ANON" -H "Authorization: Bearer $ANON")
+          echo "REST ping -> HTTP $CODE"
+          # 200 = alive (RLS returns empty list to anon — expected). Anything else = investigate.
+          [ "$CODE" = "200" ] || { echo "::warning::Supabase may be paused or unreachable (HTTP $CODE) — check the dashboard"; exit 1; }
