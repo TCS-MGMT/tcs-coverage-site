@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TCS Office Coverage Scheduler</title>
+<meta name="theme-color" content="#eb7c54" />
+<link rel="icon" type="image/png" href="logo.png?v=1" />
+<link rel="apple-touch-icon" href="logo.png?v=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Raleway:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css?v=12" />
+</head>
+<body>
+
+<!-- ===================== LOGIN SCREEN ===================== -->
+<div id="loginScreen" class="login-screen" hidden>
+  <div class="login-card">
+    <div class="logo big"><img src="logo.png?v=1" alt="Texas Cleaning Services" /></div>
+    <h1>Coverage Scheduler</h1>
+    <p class="login-sub">Sign in to see your schedule.</p>
+    <form id="loginForm" autocomplete="on">
+      <label>Email
+        <input type="email" id="loginEmail" required autocomplete="username" placeholder="you@texascleaning…" />
+      </label>
+      <label>Password
+        <input type="password" id="loginPass" required autocomplete="current-password" placeholder="••••••••" />
+      </label>
+      <button type="submit" class="btn primary block" id="loginBtn">Sign in</button>
+      <div id="loginErr" class="login-err" hidden></div>
+    </form>
+    <p class="login-foot" id="loginFoot">Don't have a login yet? Ask your manager to add you.</p>
+  </div>
+</div>
+
+<!-- ===================== MEMBER VIEW ===================== -->
+<div id="memberApp" hidden>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo"><img src="logo.png?v=1" alt="Texas Cleaning Services" /></div>
+      <div>
+        <h1 id="memberHi">Your week</h1>
+        <p class="sub">Coverage schedule · 8:00&nbsp;AM – 6:00&nbsp;PM</p>
+      </div>
+    </div>
+    <div class="week-nav">
+      <button id="mPrevWeek" class="btn ghost" title="Previous week">‹</button>
+      <div class="week-label" id="mWeekLabel">Week of …</div>
+      <button id="mNextWeek" class="btn ghost" title="Next week">›</button>
+      <button id="mThisWeek" class="btn ghost small">This week</button>
+    </div>
+    <div class="actions">
+      <span class="who-badge" id="mWho"></span>
+      <button id="mSignOut" class="btn ghost">Sign out</button>
+    </div>
+  </header>
+  <div id="mNotif" class="notif-host"></div>
+  <div id="mAlerts" class="alert-area"></div>
+  <div id="mStatus" class="status-host"></div>
+  <main id="memberMain"><!-- member content injected --></main>
+  <footer class="foot"><span>You're seeing your own assignments. Questions about the schedule go to your manager.</span></footer>
+</div>
+
+<!-- ===================== MANAGER APP ===================== -->
+<div id="managerApp" hidden>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo"><img src="logo.png?v=1" alt="Texas Cleaning Services" /></div>
+    <div>
+      <h1>Office Coverage Scheduler</h1>
+      <p class="sub">Phone &amp; lead coverage · 8:00&nbsp;AM – 6:00&nbsp;PM · Mon–Sun</p>
+    </div>
+  </div>
+  <div class="week-nav">
+    <button id="prevWeek" class="btn ghost" title="Previous week">‹</button>
+    <div class="week-label" id="weekLabel">Week of …</div>
+    <button id="nextWeek" class="btn ghost" title="Next week">›</button>
+    <button id="thisWeek" class="btn ghost small">This week</button>
+  </div>
+  <div class="actions">
+    <button id="autoBtn" class="btn primary">⚡ Auto-build week</button>
+    <button id="printBtn" class="btn">🖨 Print</button>
+    <button id="resetBtn" class="btn ghost">Reset week</button>
+    <span class="who-badge" id="gWho"></span>
+    <button id="gSignOut" class="btn ghost" hidden>Sign out</button>
+  </div>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+<div id="syncNote" class="sync-note" hidden></div>
+<div id="gNotif" class="notif-host"></div>
+<div id="gAlerts" class="alert-area"></div>
+
+<main>
+  <!-- ============ LIVE STATUS (right now) ============ -->
+  <section class="card" id="liveCard">
+    <div class="card-head">
+      <h2>0 · Live status — right now</h2>
+      <p class="hint">Who's actually on the clock this minute, and whether each city is covered. You'll get a pop-up when someone stops working or a city drops to nobody.</p>
+    </div>
+    <div id="gBoard" class="board"></div>
+    <div id="gOwnerStatus" class="status-host"></div>
+  </section>
+
+  <!-- ============ ROSTER + AVAILABILITY ============ -->
+  <section class="card">
+    <div class="card-head">
+      <h2>1 · Team &amp; availability</h2>
+      <p class="hint">Set who is <b>Working</b>, <b>Off</b>, or on <b>PTO</b> each day. Everything below recalculates instantly.</p>
+    </div>
+    <div class="table-scroll">
+      <table class="avail-table" id="availTable">
+        <thead>
+          <tr>
+            <th class="person-col">Person</th>
+            <th class="role-col">Role / Cities</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <span class="chip rep">Owner — leads their cities (Barbara = Austin + San Antonio, Kitzia = Dallas + Fort Worth)</span>
+      <span class="chip floater">Backup — covers any city (Mary)</span>
+      <span class="chip owner">You — full access / last resort</span>
+    </div>
+  </section>
+
+  <!-- ============ WEEK GRID ============ -->
+  <section class="card">
+    <div class="card-head">
+      <h2>2 · Weekly schedule</h2>
+      <p class="hint">Each <b>city</b> is staffed on its own — pick and choose freely. The owner opens it; the <b>2nd</b> slot is the backup (Mary or You) who covers lunches &amp; breaks.</p>
+    </div>
+    <div class="week-grid" id="weekGrid"></div>
+  </section>
+
+  <!-- ============ DAY DETAIL ============ -->
+  <section class="card">
+    <div class="card-head row">
+      <div>
+        <h2>3 · Day detail &amp; coverage check</h2>
+        <p class="hint">Hour-by-hour proof that each city is covered. <b>Green</b> = 2+ people. <b>Amber</b> = single coverage (backup on call). <b>Red</b> = nobody — fix it.</p>
+      </div>
+      <div class="day-picker" id="dayPicker"></div>
+    </div>
+    <div id="dayDetail"></div>
+  </section>
+
+  <!-- ============ TEAM ACCESS (owner only) ============ -->
+  <section class="card" id="accessCard" hidden>
+    <div class="card-head">
+      <h2>4 · Team access — who can edit</h2>
+      <p class="hint"><b>Manager</b> = full access to build &amp; change the schedule (a sub-manager, like you). <b>Member</b> = sees only their own week. Only you (the owner) can change this.</p>
+    </div>
+    <div id="gAccess" class="access-list"></div>
+  </section>
+</main>
+
+<footer class="foot">
+  <span id="footNote">Your schedule is saved in this browser.</span>
+</footer>
+</div><!-- /#managerApp -->
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js?v=2"></script>
+<script src="app.js?v=19"></script>
+</body>
+</html>
