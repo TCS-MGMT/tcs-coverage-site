@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800&family=Raleway:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="styles.css?v=12" />
+<link rel="stylesheet" href="styles.css?v=13" />
 </head>
 <body>
 
@@ -122,7 +122,7 @@
     </div>
     <div class="legend">
       <span class="chip rep">Owner — leads their cities (Barbara = Austin + San Antonio, Kitzia = Dallas + Fort Worth)</span>
-      <span class="chip floater">Backup — covers any city (Mary)</span>
+      <span class="chip floater">Tiffany — manager, covers any city (usually Sunday)</span>
       <span class="chip owner">You — full access / last resort</span>
     </div>
   </section>
@@ -131,7 +131,7 @@
   <section class="card">
     <div class="card-head">
       <h2>2 · Weekly schedule</h2>
-      <p class="hint">Each <b>city</b> is staffed on its own — pick and choose freely. The owner opens it; the <b>2nd</b> slot is the backup (Mary or You) who covers lunches &amp; breaks.</p>
+      <p class="hint">Usually <b>two people Mon–Sat</b>: each covers their own cities and is the <b>backup</b> on the other's, on staggered shifts, so every city always has someone. <b>Sunday</b> is usually Tiffany alone. Change anyone's day in section 1 and that day rebuilds.</p>
     </div>
     <div class="week-grid" id="weekGrid"></div>
   </section>
@@ -141,7 +141,7 @@
     <div class="card-head row">
       <div>
         <h2>3 · Day detail &amp; coverage check</h2>
-        <p class="hint">Hour-by-hour proof that each city is covered. <b>Green</b> = 2+ people. <b>Amber</b> = single coverage (backup on call). <b>Red</b> = nobody — fix it.</p>
+        <p class="hint">Hour-by-hour proof that each city is covered. <b>Green</b> = 2+ people. <b>Amber</b> = single coverage (backup on call). <b>Red</b> = nobody — fix it. <b>Grey</b> = expected gap on a one-person day.</p>
       </div>
       <div class="day-picker" id="dayPicker"></div>
     </div>
@@ -165,6 +165,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js?v=2"></script>
-<script src="app.js?v=19"></script>
+<script src="app.js?v=20"></script>
 </body>
 </html>

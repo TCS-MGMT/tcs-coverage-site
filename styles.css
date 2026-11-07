@@ -141,6 +141,10 @@ main{max-width:1200px;margin:0 auto;padding:22px;display:flex;flex-direction:col
 .covcell.c0{background:var(--bad)}
 .covcell.c1{background:var(--warn)}
 .covcell.c2{background:var(--ok)}
+.covcell.cx{background:repeating-linear-gradient(45deg,#cbd5e1,#cbd5e1 4px,#e2e8f0 4px,#e2e8f0 8px);color:#64748b}   /* expected gap, one-person day */
+.cov-pill.solo{background:#f1f5f9;color:#64748b}
+.op-tag.bk{background:#f1f5f9;color:#64748b}
+.ms-row.bk b,.ms-row.bk span{color:var(--muted)}
 
 /* assignment editor */
 .assign-editor{display:flex;flex-direction:column;gap:8px}

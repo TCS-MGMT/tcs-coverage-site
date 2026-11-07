@@ -28,22 +28,27 @@ const LEGACY = { G1: ['AUS', 'SAT'], G2: ['DAL', 'FTW'] };
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-/* role: rep = OWNS specific cities (its `home` list) + OpenPhone-exclusive to them.
-         floater = backs up ANY city, on every number set (Mary).
-         backup  = secondary floater / sub-manager (Tiffany).
-         owner   = you; last-resort, gets full access when escalated.
-   `home` is now a LIST of city ids a rep owns (a rep covers all of them).      */
-// lunch:false => works a straight 9-hour day with NO break (Tiffany). Everyone
-// else works 8 hours with a mandatory 1-hour lunch.
+/* role: rep    = OWNS specific cities (its `home` list) + OpenPhone-exclusive to them.
+         backup = Tiffany: manager who also works the phones on any city
+                  (usually the Sunday one-person day).
+         owner  = you; last resort.
+   former: no longer on the team. Kept ONLY so past weeks still show the name;
+           left out of every roster, schedule, alert and suggestion.
+   `home` is a LIST of city ids a rep owns (a rep covers all of them).
+   lunch:false = a straight no-break day (Tiffany, 9.5h). Everyone else works
+   8 hours with a mandatory 1-hour lunch.
+   NEVER change an id (it links logins, presence and saved weeks); only `name`. */
 const PEOPLE = [
   { id: 'barbara', name: 'Barbara',     role: 'rep',     home: ['AUS', 'SAT'], color: 'var(--c-aus)' },
   { id: 'kitzia',  name: 'Kitzia',      role: 'rep',     home: ['DAL', 'FTW'], color: 'var(--c-dal)' },
-  { id: 'maria',   name: 'Mary',        role: 'floater', home: [], color: 'var(--ok)' },
   { id: 'tiffany', name: 'Tiffany',     role: 'backup',  home: [], color: '#db2777', lunch: false, workMin: 570 },
   { id: 'owner',   name: 'You (Owner)', role: 'owner',   home: [], color: 'var(--owner)' },
+  { id: 'maria',   name: 'Mary',        role: 'floater', home: [], color: '#94a3b8', former: true },   // left the team, Nov 2026
 ];
 const PERSON = id => PEOPLE.find(p => p.id === id);
-const ROLE_LABEL = { rep: 'Owner', floater: 'Backup', backup: 'Backup', owner: 'Full access · last resort' };
+const isFormer = id => { const p = PERSON(id); return !!(p && p.former); };
+const ACTIVE = PEOPLE.filter(p => !p.former);          // everyone still on the team
+const ROLE_LABEL = { rep: 'Owner', floater: 'Former', backup: 'Manager · any city', owner: 'Full access · last resort' };
 const isFlexible = p => p.role !== 'rep';            // floater / backup / owner may cover any city
 const homeCities = p => (p && Array.isArray(p.home)) ? p.home : [];   // cities a rep owns
 const ownsCity = (p, gid) => p && p.role === 'rep' && homeCities(p).includes(gid);
@@ -51,6 +56,30 @@ const ownerOfCity = gid => PEOPLE.find(p => ownsCity(p, gid));        // the rep
 const takesLunch = p => !p || p.lunch !== false;     // Tiffany = false (no break)
 // the person's working minutes: explicit workMin wins, else 8h (with lunch) / 9h (no break)
 const maxWorkMin = p => (p && p.workMin) ? p.workMin : (takesLunch(p) ? 480 : 540);
+
+/* Staffing model (Nov 2026, after Mary left): usually TWO people Mon–Sat and ONE on
+   Sunday. The phone team is the two city owners + Tiffany; any two can be the pair.
+   • Each owner's cities are a "side". A working owner takes their own side; a side
+     whose owner is off goes to the next free person in FILL_ORDER.
+   • A pair staggers (opener + closer) and each is the planned BACKUP on the other
+     side, so every city has someone all day. Planned backups count toward the
+     schedule's coverage but NOT toward live coverage: when a primary steps away the
+     city still alerts, and the backup taps "I'll cover it" (and is told to unmute).
+   • A third person becomes the floating backup (closer) on every city.
+   • One person = a "solo day": they cover all four cities, and the minutes nobody
+     can cover (lunch, edges) are EXPECTED: grey, no alarms, no gap texts.          */
+const CORE_TEAM = ['barbara', 'kitzia', 'tiffany'];
+const FILL_ORDER = ['tiffany', 'owner', 'barbara', 'kitzia'];
+const SIDES = PEOPLE.filter(p => p.role === 'rep' && !p.former).map(p => ({ owner: p.id, cities: homeCities(p) }));
+// Who is marked Working on a NEW week (any day can still be changed by hand).
+const DEFAULT_WORKING = {
+  Mon: ['barbara', 'kitzia'], Tue: ['barbara', 'kitzia'], Wed: ['barbara', 'kitzia'],
+  Thu: ['barbara', 'kitzia'], Fri: ['barbara', 'kitzia'], Sat: ['barbara', 'kitzia'],
+  Sun: ['tiffany'],
+};
+// Bumped when the team model changes: a current/future week saved under an older
+// model is rebuilt once (past weeks are left alone as history).
+const TEAM_VERSION = 2;
 
 /* shift presets — each is exactly 8 working hours + a 1-hour midday lunch */
 // Lunch begins 3 hours after clock-in: 8a start -> 11a–12p, 9a start -> 12p–1p.
@@ -108,14 +137,37 @@ const isManager = () => !ME || ME.role === 'manager';   // offline/local = manag
 
 const storageKey = () => 'tcs-cov-' + isoDate(weekStart);
 
-function blankDay() {
+const defaultStatus = (d, pid) => (!isFormer(pid) && (DEFAULT_WORKING[d] || []).includes(pid)) ? 'work' : 'off';
+function blankDay(d) {
   const status = {};
-  PEOPLE.forEach(p => { status[p.id] = 'work'; });
+  PEOPLE.forEach(p => { status[p.id] = defaultStatus(d, p.id); });
   return { status, assign: [] };
 }
+function blankWeek() { const W = { _team: TEAM_VERSION }; DAYS.forEach(d => { W[d] = blankDay(d); }); return W; }
 function ensureDays() {
-  if (!S || !S.Mon) { S = {}; DAYS.forEach(d => S[d] = blankDay()); autoBuildAll(); }
-  DAYS.forEach(d => { if (!S[d]) S[d] = blankDay(); });
+  if (!S || !S.Mon) { S = blankWeek(); autoBuildAll(); }
+  DAYS.forEach(d => { if (!S[d]) S[d] = blankDay(d); });
+}
+// One-time upgrade of a CURRENT or FUTURE week saved under an older team model
+// (e.g. one with Mary on it): former teammates go Off, any "Working" (the old
+// default for everyone) resets to the new default, deliberate Off/PTO marks are
+// kept, and each day is rebuilt. Past weeks are left untouched as history.
+// Returns true if it changed the week (so a manager re-saves it).
+function upgradeTeam(W, ws) {
+  if (!W || W._team === TEAM_VERSION) return false;
+  if (isoDate(ws) < isoDate(mondayOf(new Date()))) return false;
+  DAYS.forEach(d => {
+    const day = W[d]; if (!day) return;
+    day.status = day.status || {};
+    PEOPLE.forEach(p => {
+      const cur = day.status[p.id];
+      if (p.former) day.status[p.id] = 'off';
+      else if (cur === undefined || cur === 'work') day.status[p.id] = defaultStatus(d, p.id);
+    });
+    buildDay(day);
+  });
+  W._team = TEAM_VERSION;
+  return true;
 }
 // Rewrite any old 2-group assignment (group:'G1'/'G2') into the new per-city
 // ones so a week saved before the split renders cleanly. Returns true if it
@@ -150,7 +202,8 @@ async function loadWeek() {
   }
   ensureDays();                                  // build a starter week if empty
   const migrated = migrateLegacy();              // upgrade any pre-split (G1/G2) week in place
-  if (ONLINE && isManager() && (!weekPublished || migrated)) await saveWeek();  // publish / persist the upgrade
+  const upgraded = upgradeTeam(S, weekStart);    // current/future week on an older team model -> rebuild once
+  if (isManager() && (migrated || upgraded || (ONLINE && !weekPublished))) await saveWeek();  // publish / persist the upgrade
 }
 
 let _saveTimer = null;
@@ -176,36 +229,45 @@ function persist() { clearTimeout(_saveTimer); _saveTimer = setTimeout(saveWeek,
 const newId = () => 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 /* --------------------------- AUTO-BUILD -------------------------------- */
-/* Build a sensible default for one day, per city:
-   • Each city's OWNER (the rep) opens it. A rep owns 2 cities, so they open
-     both. If the owner is off, the floater chain (Mary -> Tiffany -> You) steps
-     into that city.
-   • Then ONE free floater (Mary, else You, else Tiffany) is the staggered closer
-     across every city — they carry lunches/edges so no city goes empty mid-day. */
-function autoBuildDay(d) {
-  const day = S[d];
+/* Build one day from who's marked Working (see the staffing model above). */
+function buildDay(day) {
   day.assign = [];
-  const working = id => day.status[id] === 'work';
-  const fallback = ['maria', 'tiffany', 'owner'];   // who covers a city when its owner is off
+  const working = id => !!day.status && day.status[id] === 'work' && !isFormer(id);
+  const core = CORE_TEAM.filter(working);
+  const pool = core.length >= 2 ? core : core.concat(working('owner') ? ['owner'] : []);   // You only fill a short day
+  if (!pool.length) return;                                    // nobody working -> red, on purpose
+  const push = (personId, group, preset, backup) => day.assign.push(backup
+    ? { id: newId(), personId, group, preset, backup: true }
+    : { id: newId(), personId, group, preset });
 
-  // Pass 1 — primary (opener) for each city: its owner, else the first free floater.
-  GROUPS.forEach(g => {
-    const own = ownerOfCity(g.id);
-    const primary = (own && working(own.id)) ? own.id : fallback.find(id => working(id));
-    if (primary) day.assign.push({ id: newId(), personId: primary, group: g.id, preset: 'open' });
+  if (pool.length === 1) {                                      // solo day: one person, all four cities
+    GROUPS.forEach(g => push(pool[0], g.id, 'mid'));
+    return;
+  }
+  // each owner's side: the owner if working, else the next free person
+  const used = new Set();
+  const sides = SIDES.map(s => ({ ...s, who: pool.includes(s.owner) ? s.owner : null }));
+  sides.forEach(s => { if (s.who) used.add(s.who); });
+  sides.forEach(s => {
+    if (s.who) return;
+    s.who = FILL_ORDER.find(id => pool.includes(id) && !used.has(id)) || null;
+    if (s.who) used.add(s.who);
   });
-
-  // Pass 2 — one floating backup (closer) on every city, to stagger lunches so
-  // single-owner cities stay covered while the owner is on break. Pick a free
-  // floater who isn't already a primary (one person works ONE shift).
-  const primaries = new Set(day.assign.map(a => a.personId));
-  const backup = ['maria', 'owner', 'tiffany'].find(id => working(id) && !primaries.has(id));
-  if (backup) GROUPS.forEach(g => {
-    if (!day.assign.some(a => a.personId === backup && a.group === g.id))
-      day.assign.push({ id: newId(), personId: backup, group: g.id, preset: 'close' });
-  });
+  const filled = sides.filter(s => s.who);
+  const floaters = pool.filter(id => !used.has(id));
+  if (floaters.length) {
+    // three people: both sides open, the extra person is the floating backup (closer) everywhere
+    filled.forEach(s => s.cities.forEach(g => push(s.who, g, 'open')));
+    floaters.forEach(f => GROUPS.forEach(g => push(f, g.id, 'close', true)));
+  } else {
+    // a pair: stagger (opener + closer) and each backs up the other side
+    filled.forEach((s, i) => { s.preset = i === 0 ? 'open' : 'close'; });
+    filled.forEach(s => s.cities.forEach(g => push(s.who, g, s.preset)));
+    filled.forEach(s => filled.filter(o => o !== s).forEach(o => o.cities.forEach(g => push(s.who, g, s.preset, true))));
+  }
 }
-function autoBuildAll() { DAYS.forEach(autoBuildDay); saveWeek(); }
+function autoBuildDay(d) { buildDay(S[d]); }
+function autoBuildAll() { DAYS.forEach(d => autoBuildDay(d)); saveWeek(); }
 
 /* --------------------------- COVERAGE ENGINE --------------------------- */
 function slotRange(i) { return [OPEN_MIN + i * SLOT, OPEN_MIN + (i + 1) * SLOT]; }
@@ -243,29 +305,34 @@ function windowsWhere(covArr, predicate) {
 }
 
 /* ----------------------------- RULES ----------------------------------- */
-function escalated(d) {   // Mary AND Tiffany both unavailable
-  const st = S[d].status;
-  return st.maria !== 'work' && st.tiffany !== 'work';
-}
+// the active people scheduled on a day (planned primaries + backups)
+const dayPeople = day => [...new Set(((day && day.assign) || []).map(a => a.personId).filter(id => !isFormer(id)))];
+// a one-person day: its uncovered minutes (lunch, edges) are expected, not alarms
+const isSoloDay = d => !!(S && S[d]) && dayPeople(S[d]).length === 1;
 
 function validateDay(d) {
   const day = S[d], cov = computeCoverage(d), out = [];
   const add = (level, text) => out.push({ level, text });
   const gShort = id => (GROUP(id) || { short: id }).short;   // crash-proof on an orphan/unmapped id
+  const solo = isSoloDay(d);
 
-  // 1 & 2 — coverage per group
+  // 1 & 2 — coverage per city
   GROUPS.forEach(g => {
     const arr = cov[g.id];
+    if (!day.assign.some(a => a.group === g.id)) { add('bad', `${g.short}: nobody assigned.`); return; }
+    if (solo) return;                                           // summarized once below
     const zeros = windowsWhere(arr, n => n === 0);
     const ones = windowsWhere(arr, n => n === 1);
     if (zeros.length) add('bad', `${g.short}: NO coverage at ${zeros.join(', ')} — assign someone.`);
-    if (!zeros.length && ones.length) {
-      const bk = backupName(d, g.id);
-      add('warn', `${g.short}: single coverage at ${ones.join(', ')} (lunch/edges). On-call backup: ${bk}.`);
-    }
+    if (!zeros.length && ones.length) add('warn', `${g.short}: one person at ${ones.join(', ')} (lunch/edges). On-call backup: ${backupName(d, g.id)}.`);
     if (!zeros.length && !ones.length && arr.length) add('ok', `${g.short}: two-person coverage all day. ✓`);
-    if (!day.assign.some(a => a.group === g.id)) add('bad', `${g.short}: nobody assigned.`);
   });
+  if (solo) {
+    const who = PERSON(dayPeople(day)[0]);
+    const g0 = GROUPS.find(g => day.assign.some(a => a.group === g.id));
+    const gaps = g0 ? windowsWhere(cov[g0.id], n => n === 0) : [];
+    add('ok', `One-person day: ${who ? who.name : 'one person'} covers every city.${gaps.length ? ` Expected gaps, no alarms: ${gaps.join(', ')}.` : ' Covered all day. ✓'}`);
+  }
 
   // 3 & 4 — per-shift hours + mandatory lunch (Tiffany works 9h with no break)
   day.assign.forEach(a => {
@@ -282,30 +349,28 @@ function validateDay(d) {
     if (day.status[a.personId] !== 'work') add('warn', `${p.name} is marked ${day.status[a.personId].toUpperCase()} but is assigned to ${GROUP(a.group).short}.`);
   });
 
-  // 5 — rep exclusivity: a rep should only be on the cities it owns.
-  const esc = escalated(d);
-  PEOPLE.forEach(p => {
-    const gs = [...new Set(day.assign.filter(a => a.personId === p.id).map(a => a.group))];
-    if (p.role === 'rep') {
-      const wrong = gs.filter(g => !homeCities(p).includes(g));
-      if (wrong.length && !esc) add('warn', `${p.name} owns ${homeCities(p).map(g => gShort(g)).join(' & ')} but is also on ${wrong.map(g => gShort(g)).join(' & ')} — that breaks number/notification separation.`);
-    } else if (gs.length > 1) {
-      add('ok', `${p.name} covers ${gs.map(g => gShort(g)).join(', ')} as the floater (covers any city).`);
+  // 5 — owner exclusivity: an owner shouldn't be the PRIMARY on another owner's city while
+  // that owner is working. (Planned backups, and covering for an absent owner, are fine.)
+  ACTIVE.filter(p => p.role === 'rep').forEach(p => {
+    const foreign = [...new Set(day.assign.filter(a => a.personId === p.id && !a.backup && !homeCities(p).includes(a.group)).map(a => a.group))]
+      .filter(g => { const o = ownerOfCity(g); return o && day.status[o.id] === 'work'; });
+    if (foreign.length) {
+      const owners = [...new Set(foreign.map(g => ownerOfCity(g).name))];
+      add('warn', `${p.name} is primary on ${foreign.map(gShort).join(' & ')} while ${owners.join(' & ')} is working — that breaks number/notification separation.`);
     }
   });
 
-  // 6 — backup rules: when a city's owner is off, Mary (or You) should cover it.
-  const st = day.status;
-  PEOPLE.filter(p => p.role === 'rep' && st[p.id] !== 'work').forEach(rep => {
+  // 6 — when a city's owner is off, someone else must be its primary
+  ACTIVE.filter(p => p.role === 'rep' && day.status[p.id] !== 'work').forEach(rep => {
+    const covered = [], bare = [], who = new Set();
     homeCities(rep).forEach(gid => {
-      const on = day.assign.filter(a => a.group === gid).map(a => a.personId);
-      if (!on.includes('maria') && !on.includes('owner')) add('warn', `${rep.name} is ${st[rep.id].toUpperCase()} — Mary (or You) should cover ${GROUP(gid).short}.`);
-      else add('ok', `${rep.name} off → ${on.includes('maria') ? 'Mary' : 'You'} covering ${GROUP(gid).short}. ✓`);
+      const on = day.assign.filter(a => a.group === gid && !a.backup).map(a => PERSON(a.personId)).filter(Boolean);
+      if (on.length) { covered.push(gShort(gid)); on.forEach(p => who.add(firstName(p))); } else bare.push(gShort(gid));
     });
+    const st = (day.status[rep.id] || 'off').toUpperCase();
+    if (bare.length) add('warn', `${rep.name} is ${st} — nobody is covering ${bare.join(' & ')}.`);
+    if (covered.length) add('ok', `${rep.name} ${st.toLowerCase()} → ${[...who].join(' & ')} covering ${covered.join(' & ')}. ✓`);
   });
-
-  // 7 — escalation note
-  if (esc) add('warn', `Mary and Tiffany are both out — full access granted to the remaining rep(s) and You (number/notification separation lifted for today).`);
 
   return out;
 }
@@ -313,14 +378,17 @@ function validateDay(d) {
 /* the on-call backup name for single-coverage windows */
 function backupName(d, g) {
   const day = S[d];
-  if (day.status.maria === 'work') return 'Mary';
-  if (day.status.owner === 'work') return 'You';
-  if (day.status.tiffany === 'work') return 'Tiffany';
-  return 'no backup available';   // only floaters count as on-call backup; the sole coverer isn't their own backup
+  const planned = day.assign.find(a => a.group === g && a.backup && !isFormer(a.personId));
+  if (planned && PERSON(planned.personId)) return firstName(PERSON(planned.personId));
+  const onCity = day.assign.filter(a => a.group === g).map(a => a.personId);
+  const other = FILL_ORDER.find(id => day.status[id] === 'work' && !isFormer(id) && !onCity.includes(id));
+  return other ? firstName(PERSON(other)) : 'no backup available';   // the sole coverer isn't their own backup
 }
 
-/* day-level coverage summary for the week grid */
+/* day-level coverage summary for the week banner */
 function daySummary(d) {
+  if (!S[d].assign.length) return { cls: 'bad', text: 'nobody on' };
+  if (isSoloDay(d)) return { cls: 'solo', text: 'one person' };
   const cov = computeCoverage(d);
   let worst = 2;
   GROUPS.forEach(g => cov[g.id].forEach(s => { if (s.length < worst) worst = s.length; }));
@@ -346,21 +414,20 @@ function renderWeekLabel() {
 
 function renderBanner() {
   const b = $('#banner');
-  const escDays = DAYS.filter(escalated);
   let worst = null;
   DAYS.forEach(d => { const s = daySummary(d); if (s.cls === 'bad') worst = 'bad'; else if (s.cls === 'warn' && worst !== 'bad') worst = 'warn'; });
+  const soloDays = DAYS.filter(isSoloDay);
+  const soloNote = soloDays.length ? ` ${soloDays.join(', ')} ${soloDays.length > 1 ? 'are one-person days' : 'is a one-person day'}: grey gaps there are expected.` : '';
+  b.hidden = false;
   if (worst === 'bad') {
-    b.hidden = false; b.className = 'banner bad';
+    b.className = 'banner bad';
     b.textContent = '⚠ Some city has an uncovered gap this week — open the red day below and assign someone.';
-  } else if (escDays.length) {
-    b.hidden = false; b.className = 'banner warn';
-    b.textContent = `Heads-up: Mary & Tiffany are both out on ${escDays.join(', ')} — full access is granted to the remaining team those days.`;
   } else if (worst === 'warn') {
-    b.hidden = false; b.className = 'banner ok';
-    b.textContent = '✓ Every city is covered all week. Amber slots are normal lunch/edge windows — the backup is on call.';
+    b.className = 'banner ok';
+    b.textContent = '✓ Every city is covered all week. Amber slots are normal lunch/edge windows — the backup is on call.' + soloNote;
   } else {
-    b.hidden = false; b.className = 'banner ok';
-    b.textContent = '✓ Full two-person coverage on every city, all week.';
+    b.className = 'banner ok';
+    b.textContent = '✓ Every city is covered all week.' + soloNote;
   }
 }
 
@@ -376,9 +443,9 @@ function renderAvail() {
   });
 
   const tb = tbl.tBodies[0]; tb.innerHTML = '';
-  PEOPLE.forEach(p => {
+  ACTIVE.forEach(p => {
     const tr = el('tr');
-    const cities = p.role === 'rep' ? homeCities(p).map(g => GROUP(g).name).join(' · ') : 'Any city (backup)';
+    const cities = p.role === 'rep' ? homeCities(p).map(g => GROUP(g).name).join(' · ') : (p.role === 'owner' ? 'Any city (last resort)' : 'Any city');
     const hrs = takesLunch(p) ? '8-hr day · 1-hr lunch' : (maxWorkMin(p) / 60) + '-hr day · no break';
     tr.appendChild(el('td', 'person-col', `<div class="person-cell"><span class="dot" style="background:${p.color}"></span>${p.name}</div>`));
     tr.appendChild(el('td', 'role-col', `<div class="role-tag">${ROLE_LABEL[p.role]}<span class="cap" style="display:block">${cities}</span><span class="cap" style="display:block;color:#94a3b8">${hrs}</span></div>`));
@@ -389,7 +456,7 @@ function renderAvail() {
         const btn = el('button', S[d].status[p.id] === v ? 'on' : '', lbl);
         btn.dataset.v = v;
         // changing availability re-fills THAT day so the backup rules apply
-        // automatically (e.g. Barbara off -> Mary covers Austin/SA).
+        // automatically (e.g. Kitzia off -> Tiffany takes Dallas + Fort Worth).
         btn.onclick = () => { S[d].status[p.id] = v; autoBuildDay(d); persist(); render(); };
         seg.appendChild(btn);
       });
@@ -420,7 +487,7 @@ function renderWeekGrid() {
       list.forEach(a => {
         const p = PERSON(a.personId), t = shiftTimes(a);
         const row = el('div', 'assign');
-        const isBk = list.indexOf(a) > 0;
+        const isBk = !!a.backup || list.indexOf(a) > 0;
         if (isBk) row.classList.add('bk');
         row.innerHTML = `<span class="who"><span class="dot" style="width:7px;height:7px;background:${p.color};display:inline-block;border-radius:50%;margin-right:4px"></span>${p.name}</span>`
           + `<span class="sh">${fmt(t.start)}–${fmt(t.end)}</span>`;
@@ -429,8 +496,9 @@ function renderWeekGrid() {
       // coverage pill
       const arr = cov[g.id];
       const worst = Math.min(...arr.map(s => s.length));
-      const pill = el('div', 'cov-pill ' + (worst >= 2 ? 'ok' : worst === 1 ? 'warn' : 'bad'),
-        worst >= 2 ? '✓ 2+ covered' : worst === 1 ? '1 + backup' : '✗ gap');
+      const solo = isSoloDay(d) && list.length > 0;
+      const pill = el('div', 'cov-pill ' + (worst >= 2 ? 'ok' : worst === 1 ? 'warn' : solo ? 'solo' : 'bad'),
+        worst >= 2 ? '✓ 2+ covered' : worst === 1 ? '1 + backup' : solo ? 'one person' : '✗ gap');
       block.appendChild(pill);
       col.appendChild(block);
     });
@@ -457,7 +525,8 @@ function renderDayDetail() {
     const wrap = el('div', 'grp-detail');
     const arr = cov[g.id];
     const worst = Math.min(...arr.map(s => s.length));
-    const statusTxt = worst >= 2 ? 'Fully covered' : worst === 1 ? 'Single coverage in spots' : 'HAS A GAP';
+    const statusTxt = worst >= 2 ? 'Fully covered' : worst === 1 ? 'Single coverage in spots'
+      : (isSoloDay(d) && S[d].assign.some(a => a.group === g.id)) ? 'One-person day' : 'HAS A GAP';
     const own = ownerOfCity(g.id);
     const head = el('div', 'gd-head');
     head.style.background = g.color;
@@ -521,12 +590,13 @@ function buildTimeline(d, g, arr) {
     grid.appendChild(row);
   });
 
-  // coverage row
+  // coverage row (grey = expected gap on a one-person day)
+  const soloDay = isSoloDay(d);
   const covRow = el('div', 'tl-cov');
   covRow.appendChild(el('div', 'lab', 'Covered'));
   for (let i = 0; i < N_SLOTS; i++) {
     const n = arr[i].length;
-    covRow.appendChild(el('div', 'covcell c' + Math.min(n, 2), n));
+    covRow.appendChild(el('div', 'covcell ' + (n === 0 && soloDay ? 'cx' : 'c' + Math.min(n, 2)), n));
   }
   grid.appendChild(covRow);
 
@@ -538,12 +608,12 @@ function buildEditor(d, g) {
   const ed = el('div', 'assign-editor');
   const list = S[d].assign.filter(a => a.group === g.id);
   list.forEach((a, idx) => {
-    const row = el('div', 'ae-row' + (idx > 0 ? ' bk' : ''));
+    const row = el('div', 'ae-row' + (a.backup || idx > 0 ? ' bk' : ''));
     const p = PERSON(a.personId);
 
     // person select
     const sel = el('select');
-    PEOPLE.forEach(pp => {
+    PEOPLE.filter(pp => !pp.former || pp.id === a.personId).forEach(pp => {
       const o = el('option', '', `${pp.name}${pp.role === 'rep' && !homeCities(pp).includes(g.id) ? ' (other-city owner)' : ''}${S[d].status[pp.id] !== 'work' ? ' — ' + S[d].status[pp.id].toUpperCase() : ''}`);
       o.value = pp.id; if (pp.id === a.personId) o.selected = true;
       sel.appendChild(o);
@@ -562,7 +632,7 @@ function buildEditor(d, g) {
     });
     ssel.onchange = () => { a.preset = ssel.value; persist(); render(); };
 
-    row.appendChild(el('span', 'role-pin', idx === 0 ? 'Primary' : '2nd / Backup'));
+    row.appendChild(el('span', 'role-pin', a.backup ? 'Backup' : idx === 0 ? 'Primary' : '2nd'));
     row.appendChild(sel);
     row.appendChild(ssel);
     const x = el('button', 'x', '×'); x.title = 'Remove';
@@ -574,8 +644,8 @@ function buildEditor(d, g) {
   const add = el('button', 'add-assign', '+ Add person to ' + g.short);
   add.onclick = () => {
     const taken = list.map(a => a.personId);
-    const cand = PEOPLE.find(p => !taken.includes(p.id) && (isFlexible(p) || ownsCity(p, g.id)) && S[d].status[p.id] === 'work')
-      || PEOPLE.find(p => !taken.includes(p.id));
+    const cand = ACTIVE.find(p => !taken.includes(p.id) && (isFlexible(p) || ownsCity(p, g.id)) && S[d].status[p.id] === 'work')
+      || ACTIVE.find(p => !taken.includes(p.id));
     S[d].assign.push({ id: newId(), personId: cand ? cand.id : 'owner', group: g.id, preset: list.length ? 'close' : 'open' });
     persist(); render();
   };
@@ -584,34 +654,32 @@ function buildEditor(d, g) {
 }
 
 function buildOpenPhonePanel(d) {
-  const esc = escalated(d);
   const panel = el('div', 'panel');
   panel.appendChild(el('h3', '', `<span class="ic">📞</span>OpenPhone numbers & notifications`));
   GROUPS.forEach(g => {
     const block = el('div', 'op-grp');
     block.appendChild(el('div', 'og-title', g.name));
     const people = el('div', 'op-people');
-    // who is ON this group's numbers today = anyone assigned to it (+ reps of it),
-    // honoring exclusivity unless escalated
-    const onIds = new Set(S[d].assign.filter(a => a.group === g.id).map(a => a.personId));
-    if (esc) PEOPLE.forEach(p => { if (S[d].status[p.id] === 'work') onIds.add(p.id); });
-    if (!onIds.size) { people.appendChild(el('span', 'op-none', '⚠ no one on these numbers')); }
-    PEOPLE.forEach(p => {
-      if (!onIds.has(p.id)) return;
+    // ON this city's numbers = its primaries. A planned backup keeps it muted until they
+    // pick it up ("I'll cover it"), and the app then tells them to unmute.
+    const onCity = S[d].assign.filter(a => a.group === g.id && !isFormer(a.personId));
+    const primaries = new Set(onCity.filter(a => !a.backup).map(a => a.personId));
+    const backups = new Set(onCity.filter(a => a.backup && !primaries.has(a.personId)).map(a => a.personId));
+    if (!primaries.size) people.appendChild(el('span', 'op-none', '⚠ no one on these numbers'));
+    ACTIVE.forEach(p => {
       const off = S[d].status[p.id] !== 'work';
-      people.appendChild(el('span', 'op-tag' + (off ? ' off' : ''), p.name + (off ? ' (out)' : '')));
+      if (primaries.has(p.id)) people.appendChild(el('span', 'op-tag' + (off ? ' off' : ''), p.name + (off ? ' (out)' : '')));
+      else if (backups.has(p.id)) people.appendChild(el('span', 'op-tag bk' + (off ? ' off' : ''), firstName(p) + ' · backup, muted until covering'));
     });
     block.appendChild(people);
-    // exclusivity note — shown once per owning rep (under their first city)
-    const reps = PEOPLE.filter(p => ownsCity(p, g.id));
-    reps.forEach(r => {
-      if (esc || homeCities(r)[0] !== g.id) return;
+    // exclusivity note — once per owning rep (under their first city)
+    ACTIVE.filter(p => ownsCity(p, g.id)).forEach(r => {
+      if (homeCities(r)[0] !== g.id) return;
       const others = GROUPS.filter(x => !homeCities(r).includes(x.id)).map(x => x.short);
-      block.appendChild(el('div', 'role-tag', `${r.name} is exclusive to ${homeCities(r).map(c => GROUP(c).short).join(' & ')}${others.length ? ` — removed from ${others.join(', ')} numbers` : ''}.`));
+      block.appendChild(el('div', 'role-tag', `${r.name} is exclusive to ${homeCities(r).map(c => GROUP(c).short).join(' & ')}${others.length ? ` — ${others.join(', ')} stay muted unless ${r.name} is covering them` : ''}.`));
     });
     panel.appendChild(block);
   });
-  if (esc) panel.appendChild(el('div', 'warn-line warn', `<span>!</span><span>Mary & Tiffany out — number separation lifted; everyone working has full access today.</span>`));
   return panel;
 }
 
@@ -664,7 +732,9 @@ async function loadToday() {
   if (ONLINE && sb) {
     try {
       const { data } = await sb.from('schedules').select('data').eq('week_start', isoDate(mondayOf(new Date()))).maybeSingle();
-      TODAY = (data && data.data) ? expandDayLegacy(data.data[todayKey()]) : null;
+      const W = data && data.data;
+      if (W) upgradeTeam(W, mondayOf(new Date()));   // in memory: a not-yet-upgraded week still runs on the new team
+      TODAY = W ? expandDayLegacy(W[todayKey()]) : null;
     } catch (e) { TODAY = null; }
   } else { TODAY = (S && S[todayKey()]) ? expandDayLegacy(S[todayKey()]) : null; }
 }
@@ -715,8 +785,9 @@ function addCovering(personId, cityId) {        // ADD a city to what they alrea
 
 // who is responsible for a city today, and who of them is actively working now
 function liveCityStatus(gid) {
-  const planned = TODAY ? TODAY.assign.filter(a => a.group === gid).map(a => a.personId) : [];
-  const adhoc = PEOPLE.filter(p => coveringSet(p.id).includes(gid)).map(p => p.id);  // anyone covering this city ad-hoc
+  // planned PRIMARIES only: a planned backup counts once they actually pick the city up
+  const planned = TODAY ? TODAY.assign.filter(a => a.group === gid && !a.backup && !isFormer(a.personId)).map(a => a.personId) : [];
+  const adhoc = ACTIVE.filter(p => coveringSet(p.id).includes(gid)).map(p => p.id);  // anyone covering this city ad-hoc
   const assigned = [...new Set([...planned, ...adhoc])];
   const working = assigned.filter(pid => isAvailable((PRESENCE[pid] || {}).state));
   return { assigned, working };
@@ -764,20 +835,23 @@ function fireGapAlert(g) {
   osNotify('⚠ Coverage needed', `${g.name} has no one on right now.`);
   const actions = [{ label: "I'll cover it", fn: () => addCovering(ME.personId, g.id) }];
   if (ME.role === 'manager') {
-    PEOPLE.filter(p => p.id !== ME.personId && !isAvailable((PRESENCE[p.id] || {}).state))
+    ACTIVE.filter(p => p.id !== ME.personId && !isAvailable((PRESENCE[p.id] || {}).state))
       .forEach(p => actions.push({ label: `${firstName(p)} has it`, fn: () => addCovering(p.id, g.id) }));
   }
   showAlert(`⚠ <b>${g.name}</b> has <b>no one covering</b> right now — anyone can jump in.`, true, actions);
 }
+// a one-person day: their lunch/edge gaps are expected, so no gap alarms (owner's choice)
+const todayIsSolo = () => !!TODAY && dayPeople(TODAY).length === 1;
 function evaluateGaps() {
+  const solo = todayIsSolo();
   GROUPS.forEach(g => {
     const s = liveCityStatus(g.id);
-    const gap = withinHours() && s.assigned.length > 0 && s.working.length === 0;
+    const gap = !solo && withinHours() && s.assigned.length > 0 && s.working.length === 0;
     if (gap && !_alertedGaps[g.id] && !_gapTimers[g.id]) {
       _gapTimers[g.id] = setTimeout(() => {
         _gapTimers[g.id] = null;
         const s2 = liveCityStatus(g.id);
-        if (withinHours() && s2.assigned.length > 0 && s2.working.length === 0) { _alertedGaps[g.id] = true; fireGapAlert(g); }
+        if (!todayIsSolo() && withinHours() && s2.assigned.length > 0 && s2.working.length === 0) { _alertedGaps[g.id] = true; fireGapAlert(g); }
       }, GAP_DELAY_MS);
     }
     if (!gap) { _alertedGaps[g.id] = false; if (_gapTimers[g.id]) { clearTimeout(_gapTimers[g.id]); _gapTimers[g.id] = null; } }
@@ -791,7 +865,7 @@ function autoRelieveCoverers(returningPid) {
   const R = PERSON(returningPid); if (!R) return;
   if (!isAvailable((PRESENCE[returningPid] || {}).state)) return;          // only when they're actually back
   const rCities = GROUPS.filter(g =>
-    (TODAY && TODAY.assign.some(a => a.group === g.id && a.personId === returningPid)) || ownsCity(R, g.id)
+    (TODAY && TODAY.assign.some(a => a.group === g.id && a.personId === returningPid && !a.backup)) || ownsCity(R, g.id)
   ).map(g => g.id);
   if (!rCities.length) return;
   PEOPLE.forEach(C => {
@@ -800,7 +874,7 @@ function autoRelieveCoverers(returningPid) {
     // only drop cities that are genuinely AD-HOC for C (not their own home, not their plan)
     const drop = cov.filter(x => rCities.includes(x)
       && !homeCities(C).includes(x)
-      && !(TODAY && TODAY.assign.some(a => a.group === x && a.personId === C.id)));
+      && !(TODAY && TODAY.assign.some(a => a.group === x && a.personId === C.id && !a.backup)));
     if (!drop.length) return;
     const keep = cov.filter(x => !drop.includes(x));
     setStatus(C.id, (PRESENCE[C.id] || {}).state || 'working', coveringStr(keep));
@@ -963,7 +1037,7 @@ function renderBoard() {
     // assign someone to cover this city right now -> they get notified + start counting here
     const sel = el('select', 'cover-sel');
     sel.appendChild(el('option', '', '＋ Add someone to cover…'));
-    PEOPLE.filter(p => !coveringSet(p.id).includes(g.id))   // EVERYONE not already covering this city
+    ACTIVE.filter(p => !coveringSet(p.id).includes(g.id))   // everyone on the team not already covering this city
       .forEach(p => { const o = el('option', '', firstName(p)); o.value = p.id; sel.appendChild(o); });
     sel.querySelector('option').value = '';
     sel.onchange = () => {
@@ -978,7 +1052,7 @@ function renderBoard() {
   });
   host.appendChild(el('div', 'board-sub', 'Set anyone’s status (clock them in, send to break, etc.):'));
   const ppl = el('div', 'board-people');
-  PEOPLE.forEach(p => {
+  ACTIVE.forEach(p => {
     const pr = PRESENCE[p.id] || {}, st = pr.state || 'out';
     const covTag = coveringSet(p.id).length && isAvailable(st) ? ` · <span class="bp-cov">covering ${coveringNames(p.id)}</span>` : '';
     const row = el('div', 'bp-row state-' + st);
@@ -1043,7 +1117,8 @@ function renderTeamAccess() {
   if (!ONLINE) { host.appendChild(el('div', 'hint', 'Available once the app is online with logins.')); return; }
   if (!PROFILES.length) { host.appendChild(el('div', 'hint', 'No logins loaded. If this stays empty, run <b>access-setup.sql</b> in Supabase to turn this on.')); return; }
   PROFILES.slice().sort((a, b) => a.person_id === 'owner' ? -1 : b.person_id === 'owner' ? 1 : (a.person_id > b.person_id ? 1 : -1)).forEach(pr => {
-    const person = PERSON(pr.person_id), name = person ? person.name : (pr.email || pr.person_id || 'Unknown');
+    const person = PERSON(pr.person_id);
+    const name = person ? person.name + (person.former ? ' (former, login blocked)' : '') : (pr.email || pr.person_id || 'Unknown');
     const row = el('div', 'access-row');
     row.appendChild(el('div', 'ar-name', `${name}${pr.email ? ` <span class="ar-email">${pr.email}</span>` : ''}`));
     const seg = el('div', 'seg');
@@ -1142,6 +1217,12 @@ async function enter(session) {
   // live updates at all (no pop-ups, no flagging).
   try { if (session && session.access_token) sb.realtime.setAuth(session.access_token); } catch (e) {}
   ME = await resolveProfile(user);
+  if (ME.personId && isFormer(ME.personId)) {          // no longer on the team: no access
+    try { await sb.auth.signOut(); } catch (e) {}
+    ME = null; showScreen('login');
+    const err = $('#loginErr'); if (err) { err.hidden = false; err.textContent = 'This login is no longer active. Ask your manager if this is a mistake.'; }
+    return;
+  }
   subscribeRealtime();
   await loadToday(); await loadPresence();
   if (ME.personId === 'owner') await loadProfiles();
@@ -1233,12 +1314,14 @@ function renderMember() {
         const g = GROUP(a.group); if (!g) return;
         const t = shiftTimes(a);
         const key = `${t.start}-${t.end}-${t.lunchStart}-${t.lunchEnd}`;
-        if (!shifts[key]) shifts[key] = { t, cities: [] };
-        shifts[key].cities.push(g);
+        if (!shifts[key]) shifts[key] = { t, cities: [], backups: [] };
+        shifts[key][a.backup ? 'backups' : 'cities'].push(g);
       });
-      Object.values(shifts).forEach(({ t, cities }) => {
-        const cityNames = cities.map(g => g.name).join(' · ');
-        const primary = cities[0];
+      Object.values(shifts).forEach(({ t, cities, backups }) => {
+        const cityNames = cities.length ? cities.map(g => g.name).join(' · ') : 'Backup';
+        const primary = cities[0] || backups[0];
+        const backupRow = backups.length
+          ? `<div class="ms-row bk"><b>Backup for</b><span>${backups.map(g => g.name).join(' · ')}</span></div>` : '';
         // Only surface coverage info when a teammate on one of MY cities is away/out
         // today — then show who's covering (no static "on with" otherwise).
         let liveRow = '';
@@ -1260,8 +1343,9 @@ function renderMember() {
           `<div class="ms-city" style="color:${primary.color}">${cityNames}</div>` +
           `<div class="ms-row"><b>Hours</b><span>${fmt(t.start)}–${fmt(t.end)}</span></div>` +
           `<div class="ms-row"><b>Lunch</b><span>${hasLunch(t) ? fmt(t.lunchStart) + '–' + fmt(t.lunchEnd) : 'No break (' + (maxWorkMin(p) / 60) + '-hr day)'}</span></div>` +
+          backupRow +
           liveRow +
-          `<div class="ms-row"><b>Follow-ups &amp; leads</b><span>${cityNames}</span></div>`;
+          (cities.length ? `<div class="ms-row"><b>Follow-ups &amp; leads</b><span>${cityNames}</span></div>` : '');
         c.appendChild(b);
       });
     }
