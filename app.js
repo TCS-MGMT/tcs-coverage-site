@@ -5,7 +5,7 @@
    the texts always agree. This file is screens, live data and buttons.
    Tabs: Today · Week · Team · Reports (managers) — Today · My week (members).
    ============================================================================= */
-import * as C from './core.js?v=21';
+import * as C from './core.js?v=22';
 
 /* ------------------------------- helpers -------------------------------- */
 const $ = s => document.querySelector(s);
@@ -66,6 +66,7 @@ let ME = null;                 // { personId, role: manager|member, email, uid }
 let NOW = C.central(new Date(nowMs()));
 let RAW = {}, PRES = {};       // presence rows by person / the same with yesterday's leftovers as "out"
 let TODAY = null;              // today's planned day
+let TODAY_DEFAULT = false;     // true = this week isn't saved yet; today follows the default week
 let CALLS = [], LOG = [], REPORTS = [], PROFILES = [], SYNC = null;
 let VIEW = (location.hash || '').replace('#', '') || 'today';
 let weekIso = NOW.mondayIso, selDay = NOW.dayKey, WEEK = null, weekSaved = true;
@@ -106,7 +107,7 @@ async function saveWeek(iso, W) {
   else flash('Saved & shared with the team ✓');
 }
 let _saveT = null;
-function persistWeek() { clearTimeout(_saveT); const iso = weekIso, W = WEEK; _saveT = setTimeout(() => saveWeek(iso, W), 500); if (iso === NOW.mondayIso) { TODAY = W[NOW.dayKey]; evaluateGaps(); } }
+function persistWeek() { clearTimeout(_saveT); const iso = weekIso, W = WEEK; _saveT = setTimeout(() => saveWeek(iso, W), 500); if (iso === NOW.mondayIso) { TODAY = W[NOW.dayKey]; TODAY_DEFAULT = false; evaluateGaps(); } }
 async function loadWeek() {
   const r = await fetchWeek(weekIso);
   const p = prepWeek(r.W, weekIso);
@@ -115,10 +116,10 @@ async function loadWeek() {
 }
 async function loadToday() {
   const r = weekIso === NOW.mondayIso && WEEK && weekSaved ? { W: WEEK } : await fetchWeek(NOW.mondayIso);
-  if (!r.W) { TODAY = null; return; }
-  const W = JSON.parse(JSON.stringify(r.W));
-  C.migrateLegacyWeek(W); C.upgradeTeam(W, NOW.mondayIso, NOW.mondayIso, CFG);
-  TODAY = W[NOW.dayKey] || null;
+  TODAY_DEFAULT = !r.W;
+  const W = r.W ? JSON.parse(JSON.stringify(r.W)) : null;
+  if (W) { C.migrateLegacyWeek(W); C.upgradeTeam(W, NOW.mondayIso, NOW.mondayIso, CFG); }
+  TODAY = C.dayOrDefault(W, NOW.dayKey, CFG);          // same fallback the server uses
 }
 async function loadPresence() {
   if (!ONLINE) RAW = ls.get('tcs-presence') || {};
@@ -426,8 +427,8 @@ function viewToday() {
   const p = me();
   if (p && !p.former) wrap.append(statusCard(p));
   const np = notifPrompt(); if (np) wrap.append(np);
-  if (!TODAY) wrap.append(h('div', { class: 'notice' }, "This week's schedule isn't posted yet: cities show only who is covering by hand."));
-  else if (C.isSoloDay(TODAY, CFG)) wrap.append(h('div', { class: 'notice ok' }, `One-person day: ${C.nameOf(CFG, C.dayPeople(TODAY, CFG)[0])} covers every city. Uncovered minutes are expected, so there are no alarms.`));
+  if (TODAY_DEFAULT) wrap.append(h('div', { class: 'notice' }, "This week's schedule isn't published yet, so today follows the default week." + (isManager() ? ' Open the Week tab to publish it.' : '')));
+  if (C.isSoloDay(TODAY, CFG)) wrap.append(h('div', { class: 'notice ok' }, `One-person day: ${C.nameOf(CFG, C.dayPeople(TODAY, CFG)[0])} covers every city. Uncovered minutes are expected, so there are no alarms.`));
   const sub = openNow() ? 'Live from everyone’s status buttons.' : `Office hours are 8 AM – 6 PM.`;
   wrap.append(section('Cities right now', sub, h('div', { class: 'grid-cities' }, CFG.cities.map(cityCard))));
   if (isManager()) {
@@ -455,7 +456,7 @@ function statusCard(p) {
   if (planned.length) info.push(h('div', null, 'Your cities today: ', h('b', null, C.cityList(CFG, planned))));
   if (backups.length) info.push(h('div', null, 'Backup for ', h('b', null, C.cityList(CFG, backups)), h('span', { class: 'muted' }, CFG.settings.autoHandoff ? ': you get them automatically when they have no one.' : '.')));
   if (t) info.push(h('div', { class: 'muted' }, `Shift ${shiftText(t)}${C.hasLunch(t) ? ` · lunch ${C.fmtClock(t.lunchStart)}–${C.fmtClock(t.lunchEnd)}` : ' · no break'}`));
-  if (!planned.length && !backups.length) info.push(h('div', { class: 'muted' }, TODAY ? "You're not on today's schedule." : "This week's schedule isn't posted yet."));
+  if (!planned.length && !backups.length) info.push(h('div', { class: 'muted' }, "You're not on today's schedule."));
   const remind = C.isWorking(st) && adhoc.length
     ? h('div', { class: 'unmute' }, h('b', null, `🔔 You're covering ${C.cityList(CFG, adhoc)}.`), ' Keep these unmuted in OpenPhone:',
       h('ul', null, C.salesLines(CFG, adhoc).map(l => h('li', null, h('b', null, l.name), h('span', { class: 'muted' }, ' · ' + fmtPhone(l.number))))))

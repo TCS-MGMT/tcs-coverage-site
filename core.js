@@ -332,6 +332,11 @@ export function dropFormers(W, weekIso, thisMondayIso, cfg) {
   });
   return changed;
 }
+/** Today's plan: the saved day, or (week not saved yet) what the default week would build,
+ *  in memory only, so the automation still works before a manager opens the week. */
+export function dayOrDefault(W, dayKey, cfg) {
+  return (W && W[dayKey]) || buildDay(blankDay(cfg, dayKey), cfg);
+}
 /** Fill in any missing day of a stored week. */
 export function ensureWeek(W, cfg) {
   if (!W || !W.Mon) return blankWeek(cfg);
